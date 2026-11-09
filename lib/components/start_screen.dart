@@ -42,6 +42,77 @@ class _StartScreenState extends State<StartScreen>
     widget.onStart(name);
   }
 
+  void _showLeaderboard() {
+    final entries = GameStorage.leaderboard;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF101A2A),
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Top ${GameStorage.maxLeaderboardEntries}',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 8),
+                if (entries.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(
+                      child: Text('No scores yet. Go squash some ants!'),
+                    ),
+                  )
+                else
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: entries.length,
+                      itemBuilder: (context, i) {
+                        final e = entries[i];
+                        final d = e.date;
+                        return ListTile(
+                          dense: true,
+                          leading: CircleAvatar(
+                            radius: 14,
+                            backgroundColor: i == 0
+                                ? const Color(0xFFFFB347)
+                                : Colors.white12,
+                            foregroundColor: i == 0
+                                ? Colors.black
+                                : Colors.white,
+                            child: Text('${i + 1}'),
+                          ),
+                          title: Text(e.name),
+                          subtitle: Text(
+                            '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}',
+                          ),
+                          trailing: Text(
+                            '${e.score}',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 16,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -233,6 +304,35 @@ class _StartScreenState extends State<StartScreen>
                             'High score: ${GameStorage.highScore}',
                             style: Theme.of(context).textTheme.bodyMedium
                                 ?.copyWith(color: Colors.white54),
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              TextButton.icon(
+                                onPressed: _showLeaderboard,
+                                icon: const Icon(Icons.emoji_events_rounded),
+                                label: const Text('Leaderboard'),
+                              ),
+                              const SizedBox(width: 8),
+                              TextButton.icon(
+                                onPressed: () => setState(
+                                  () => GameStorage.setSoundEnabled(
+                                    !GameStorage.soundEnabled,
+                                  ),
+                                ),
+                                icon: Icon(
+                                  GameStorage.soundEnabled
+                                      ? Icons.volume_up_rounded
+                                      : Icons.volume_off_rounded,
+                                ),
+                                label: Text(
+                                  GameStorage.soundEnabled
+                                      ? 'Sound on'
+                                      : 'Sound off',
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),

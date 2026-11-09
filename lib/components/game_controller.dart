@@ -8,6 +8,7 @@ import 'EnemySpawner.dart';
 import 'Player.dart';
 import 'ScoreText.dart';
 import 'Storage.dart';
+import 'audio_service.dart';
 import 'health_bar.dart';
 import 'image_provider.dart';
 
@@ -25,9 +26,33 @@ class GameController extends StatefulWidget {
   State<GameController> createState() => _GameControllerState();
 }
 
+class _FloatingText {
+  _FloatingText({required this.position, required this.text, this.color});
+
+  final Offset position;
+  final String text;
+  final Color? color;
+  double age = 0;
+
+  static const double lifetime = 0.9;
+  bool get expired => age >= lifetime;
+}
+
 class _GameControllerState extends State<GameController>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   static const int _maxHealth = 5;
+  static const double _comboWindow = 1.0;
+  static const int _squashesPerLevel = 3;
+  static const int _maxMultiplier = 5;
+  final List<_FloatingText> _floaters = <_FloatingText>[];
+  final Stopwatch _stopwatch = Stopwatch();
+  Duration _lastFrame = Duration.zero;
+  double _clock = 0;
+  double _lastSquashAt = -100;
+  int _combo = 0;
+  int _bestCombo = 0;
+  bool _paused = false;
+  bool _newHighScore = false;
   final Random _random = Random();
   late final EnemySpawner _spawner;
   late final AnimationController _ambientController;
@@ -48,6 +73,7 @@ class _GameControllerState extends State<GameController>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _spawner = EnemySpawner(_random);
     _cake = SweetCake(center: Offset.zero, size: 160);
     _ambientController = AnimationController(
@@ -57,7 +83,34 @@ class _GameControllerState extends State<GameController>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) {
+      _pause();
+    }
+  }
+
+  void _pause() {
+    if (_paused || _gameOver || !_loopStarted) {
+      return;
+    }
+    setState(() => _paused = true);
+  }
+
+  void _resume() {
+    if (!_paused) {
+      return;
+    }
+    // Skip the time spent paused so the next frame has a normal delta.
+    _lastFrame = _stopwatch.elapsed;
+    setState(() => _paused = false);
+  }
+
+  int get _multiplier =>
+      min(1 + (max(_combo, 1) - 1) ~/ _squashesPerLevel, _maxMultiplier);
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _spawnTimer?.cancel();
     _frameTimer?.cancel();
     _ambientController.dispose();
@@ -78,17 +131,21 @@ class _GameControllerState extends State<GameController>
       const Duration(milliseconds: 760),
       (_) => _spawnAnt(),
     );
-    _frameTimer = Timer.periodic(
-      const Duration(milliseconds: 16),
-      (_) => _tick(0.016),
-    );
+    _stopwatch.start();
+    _lastFrame = _stopwatch.elapsed;
+    _frameTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
+      final now = _stopwatch.elapsed;
+      final dt = ((now - _lastFrame).inMicroseconds / 1e6).clamp(0.0, 0.05);
+      _lastFrame = now;
+      _tick(dt);
+    });
     if (mounted) {
       setState(() {});
     }
   }
 
   void _spawnAnt() {
-    if (!mounted || _gameOver || !_loopStarted) {
+    if (!mounted || _gameOver || !_loopStarted || _paused) {
       return;
     }
     if (_ants.length > 18) {
@@ -107,12 +164,24 @@ class _GameControllerState extends State<GameController>
   }
 
   void _tick(double dt) {
-    if (!mounted || _gameOver || !_loopStarted) {
+    if (!mounted || _gameOver || !_loopStarted || _paused) {
       return;
     }
 
+    _clock += dt;
+    if (_combo > 0 && _clock - _lastSquashAt > _comboWindow) {
+      _combo = 0;
+    }
+    for (final f in _floaters) {
+      f.age += dt;
+    }
+    _floaters.removeWhere((f) => f.expired);
+
     final hits = <EnemyAnt>[];
     for (final ant in _ants) {
+      if (ant.hitFlash > 0) {
+        ant.hitFlash = max(0, ant.hitFlash - dt);
+      }
       if (ant.squashed) {
         ant.squashAge += dt;
         continue;
@@ -145,7 +214,10 @@ class _GameControllerState extends State<GameController>
     }
 
     _ants.removeWhere((ant) => ant.readyToRemove);
-    if (hits.isNotEmpty || _ants.isNotEmpty || _gameOver) {
+    if (hits.isNotEmpty ||
+        _ants.isNotEmpty ||
+        _floaters.isNotEmpty ||
+        _gameOver) {
       setState(() {});
     }
   }
@@ -156,13 +228,18 @@ class _GameControllerState extends State<GameController>
     }
     _health -= 1;
     _damageFlash = true;
+    _combo = 0;
     if (_health <= 0) {
       _gameOver = true;
-      GameStorage.saveScore(widget.playerName, _score);
+      _newHighScore = GameStorage.saveScore(widget.playerName, _score);
       _spawnTimer?.cancel();
       _frameTimer?.cancel();
+      GameAudio.play(GameSound.gameOver);
+      GameAudio.haptic(heavy: true);
       return;
     }
+    GameAudio.play(GameSound.hit);
+    GameAudio.haptic(heavy: true);
     Future.delayed(const Duration(milliseconds: 180), () {
       if (mounted) {
         setState(() {
@@ -173,13 +250,107 @@ class _GameControllerState extends State<GameController>
   }
 
   void _squashAnt(EnemyAnt ant) {
-    if (_gameOver || ant.squashed) {
+    if (_gameOver || _paused || ant.squashed) {
       return;
     }
+    if (ant.hp > 1) {
+      // Multi-hit ant: absorb the tap and flash.
+      setState(() {
+        ant.hp -= 1;
+        ant.hitFlash = 0.15;
+      });
+      GameAudio.play(GameSound.combo);
+      GameAudio.haptic();
+      return;
+    }
+
+    final multiplierBefore = _multiplier;
     setState(() {
+      ant.hp = 0;
       ant.squashed = true;
       ant.squashAge = 0;
-      _score += 1;
+
+      _combo = (_clock - _lastSquashAt <= _comboWindow) ? _combo + 1 : 1;
+      _lastSquashAt = _clock;
+      _bestCombo = max(_bestCombo, _combo);
+
+      final points = ant.type.basePoints * _multiplier;
+      _score += points;
+
+      final label = _multiplier > 1
+          ? '+$points  x$_multiplier COMBO!'
+          : '+$points';
+      _floaters.add(
+        _FloatingText(
+          position: ant.center,
+          text: label,
+          color: _multiplier > 1 ? const Color(0xFFFFD36A) : Colors.white,
+        ),
+      );
+
+      if (ant.type == AntType.queen) {
+        for (var i = 0; i < 3; i++) {
+          final offset = Offset(
+            (_random.nextDouble() - 0.5) * ant.size,
+            (_random.nextDouble() - 0.5) * ant.size,
+          );
+          _ants.add(
+            _spawner.build(
+              type: AntType.normal,
+              start: ant.position + offset,
+              target: _cake.center,
+              id: _nextEnemyId++,
+              score: _score,
+              size: 48,
+            ),
+          );
+        }
+        _floaters.add(
+          _FloatingText(
+            position: ant.center - const Offset(0, 28),
+            text: 'Babies!',
+            color: const Color(0xFFFF9B4D),
+          ),
+        );
+      }
+    });
+    GameAudio.play(
+      _multiplier > multiplierBefore ? GameSound.combo : GameSound.squash,
+    );
+    GameAudio.haptic();
+  }
+
+  void _togglePause() {
+    if (_paused) {
+      _resume();
+    } else {
+      _pause();
+    }
+  }
+
+  void _restartRun() {
+    _spawnTimer?.cancel();
+    _frameTimer?.cancel();
+    _stopwatch
+      ..stop()
+      ..reset();
+    setState(() {
+      _ants.clear();
+      _floaters.clear();
+      _score = 0;
+      _health = _maxHealth;
+      _combo = 0;
+      _bestCombo = 0;
+      _clock = 0;
+      _lastSquashAt = -100;
+      _lastFrame = Duration.zero;
+      _nextEnemyId = 0;
+      _paused = false;
+      _gameOver = false;
+      _damageFlash = false;
+      _newHighScore = false;
+      _loopStarted = false;
+      _queuedArenaStart = false;
     });
   }
 
@@ -291,6 +462,18 @@ class _GameControllerState extends State<GameController>
                               maxHealth: _maxHealth,
                             ),
                           ),
+                          const SizedBox(width: 8),
+                          IconButton.filledTonal(
+                            tooltip: _paused ? 'Resume' : 'Pause',
+                            onPressed: _gameOver || !_loopStarted
+                                ? null
+                                : _togglePause,
+                            icon: Icon(
+                              _paused
+                                  ? Icons.play_arrow_rounded
+                                  : Icons.pause_rounded,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -333,6 +516,46 @@ class _GameControllerState extends State<GameController>
                                       child: _buildAnt(ant),
                                     ),
                                   ),
+                                for (final f in _floaters)
+                                  Positioned(
+                                    left: f.position.dx - 60,
+                                    top:
+                                        f.position.dy -
+                                        20 -
+                                        (f.age / _FloatingText.lifetime) * 40,
+                                    width: 120,
+                                    child: IgnorePointer(
+                                      child: Opacity(
+                                        opacity:
+                                            (1 - f.age / _FloatingText.lifetime)
+                                                .clamp(0.0, 1.0),
+                                        child: Text(
+                                          f.text,
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            color: f.color ?? Colors.white,
+                                            fontWeight: FontWeight.w900,
+                                            fontSize: 16,
+                                            shadows: const [
+                                              Shadow(
+                                                color: Colors.black87,
+                                                blurRadius: 4,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                if (_combo >= 2 && !_gameOver)
+                                  Positioned(
+                                    top: 12,
+                                    left: 0,
+                                    right: 0,
+                                    child: IgnorePointer(
+                                      child: Center(child: _buildComboChip()),
+                                    ),
+                                  ),
                                 Positioned(
                                   left: 18,
                                   right: 18,
@@ -349,6 +572,8 @@ class _GameControllerState extends State<GameController>
                                   bottom: 18,
                                   child: _buildTipCard(),
                                 ),
+                                if (_paused && !_gameOver)
+                                  Positioned.fill(child: _buildPauseOverlay()),
                                 if (_gameOver)
                                   Positioned.fill(
                                     child: _buildGameOverOverlay(),
@@ -473,12 +698,143 @@ class _GameControllerState extends State<GameController>
                   ),
                 ),
               if (!ant.squashed)
-                Image.asset(
-                  GameAssets.ant,
-                  width: ant.size,
-                  height: ant.size,
-                  fit: BoxFit.contain,
+                Stack(
+                  clipBehavior: Clip.none,
+                  alignment: Alignment.center,
+                  children: [
+                    _antSprite(ant),
+                    if (ant.type.hp > 1)
+                      Positioned(
+                        bottom: -6,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (var i = 0; i < ant.type.hp; i++)
+                              Container(
+                                width: 8,
+                                height: 8,
+                                margin: const EdgeInsets.symmetric(
+                                  horizontal: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: i < ant.hp
+                                      ? const Color(0xFFFF5252)
+                                      : Colors.white24,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                  ],
                 ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _antSprite(EnemyAnt ant) {
+    Widget sprite = Image.asset(
+      GameAssets.ant,
+      width: ant.size,
+      height: ant.size,
+      fit: BoxFit.contain,
+    );
+    final tint = ant.hitFlash > 0 ? Colors.white : ant.type.tint;
+    if (tint != null) {
+      sprite = ColorFiltered(
+        colorFilter: ColorFilter.mode(
+          tint.withValues(alpha: ant.hitFlash > 0 ? 0.8 : 0.45),
+          BlendMode.srcATop,
+        ),
+        child: sprite,
+      );
+    }
+    return sprite;
+  }
+
+  Widget _buildComboChip() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        gradient: const LinearGradient(
+          colors: [Color(0xFFFFA63D), Color(0xFFFF6A3D)],
+        ),
+      ),
+      child: Text(
+        'Combo $_combo  •  x$_multiplier',
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 0.5,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPauseOverlay() {
+    return Container(
+      color: Colors.black.withOpacity(0.65),
+      child: Center(
+        child: Container(
+          width: min(360, _arenaSize.width - 40),
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(28),
+            color: const Color(0xFF101A2A).withOpacity(0.96),
+            border: Border.all(color: Colors.white.withOpacity(0.12)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.pause_circle_rounded,
+                size: 52,
+                color: Color(0xFFFFA63D),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Paused',
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: _resume,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFFF8A2A),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: const Text('Resume'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: _restartRun,
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: const Text('Restart'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: widget.onExitToStart,
+                  child: const Text('Quit to Menu'),
+                ),
+              ),
             ],
           ),
         ),
@@ -497,7 +853,7 @@ class _GameControllerState extends State<GameController>
       child: Text(
         _gameOver
             ? 'The ants broke through. Return to the start screen to try again.'
-            : 'Tap the ants. They get faster the longer you survive.',
+            : 'Tap the ants. Chain squashes for combo points!',
         textAlign: TextAlign.center,
         style: Theme.of(
           context,
@@ -555,6 +911,23 @@ class _GameControllerState extends State<GameController>
                     context,
                   ).textTheme.titleMedium?.copyWith(color: Colors.white70),
                 ),
+                if (_newHighScore) ...[
+                  const SizedBox(height: 6),
+                  const Text(
+                    'New high score!',
+                    style: TextStyle(
+                      color: Color(0xFFFFD36A),
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 6),
+                Text(
+                  'Best combo: $_bestCombo',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: Colors.white54),
+                ),
                 const SizedBox(height: 6),
                 Text(
                   'Best score: ${GameStorage.highScore}',
@@ -566,10 +939,27 @@ class _GameControllerState extends State<GameController>
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton(
-                    onPressed: _restart,
+                    onPressed: _restartRun,
                     style: FilledButton.styleFrom(
                       backgroundColor: const Color(0xFFFF8A2A),
                       foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    child: const Text(
+                      'Play Again',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    onPressed: _restart,
+                    style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),

@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 
 import 'components/State.dart';
+import 'components/Storage.dart';
 import 'components/game_controller.dart';
 import 'components/start_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await GameStorage.init();
   runApp(const MyApp());
 }
 

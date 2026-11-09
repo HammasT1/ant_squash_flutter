@@ -9,14 +9,25 @@ class EnemySpawner {
 
   final Random random;
 
+  static const double maxSpeed = 210;
+
+  AntType _pickType(int score) {
+    final roll = random.nextDouble();
+    if (score >= 40 && roll < 0.05) return AntType.queen;
+    if (score >= 20 && roll < 0.2) return AntType.tank;
+    if (score >= 8 && roll < 0.4) return AntType.fast;
+    return AntType.normal;
+  }
+
   EnemyAnt spawn({
     required Size arenaSize,
     required Offset target,
     required int id,
     required int score,
   }) {
+    final type = _pickType(score);
+    final size = (58 + random.nextDouble() * 16) * type.sizeMultiplier;
     final edge = random.nextInt(4);
-    final size = 58 + random.nextDouble() * 16;
     double x;
     double y;
 
@@ -39,10 +50,31 @@ class EnemySpawner {
         break;
     }
 
-    final start = Offset(x, y);
+    return build(
+      type: type,
+      start: Offset(x, y),
+      target: target,
+      id: id,
+      score: score,
+      size: size,
+    );
+  }
+
+  /// Spawns a [type] ant at an explicit position (used for queen offspring).
+  EnemyAnt build({
+    required AntType type,
+    required Offset start,
+    required Offset target,
+    required int id,
+    required int score,
+    double? size,
+  }) {
+    final antSize =
+        size ?? (58 + random.nextDouble() * 16) * type.sizeMultiplier;
     final delta = target - start;
     final distance = max(delta.distance, 1);
-    final speed = 48 + random.nextDouble() * 34 + score * 1.2;
+    final baseSpeed = min(48 + random.nextDouble() * 34 + score * 1.2, 150);
+    final speed = min(baseSpeed * type.speedMultiplier, maxSpeed);
     final velocity = Offset(
       delta.dx / distance * speed,
       delta.dy / distance * speed,
@@ -50,9 +82,10 @@ class EnemySpawner {
 
     return EnemyAnt(
       id: id,
+      type: type,
       position: start,
       velocity: velocity,
-      size: size,
+      size: antSize,
       heading: atan2(velocity.dy, velocity.dx) + pi / 2,
     );
   }
