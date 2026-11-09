@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 
 import 'Enemy.dart';
@@ -62,7 +63,7 @@ class _GameControllerState extends State<GameController>
   static const int _maxMultiplier = 5;
   final List<_FloatingText> _floaters = <_FloatingText>[];
   final List<_TapRipple> _ripples = <_TapRipple>[];
-  final Stopwatch _stopwatch = Stopwatch();
+  final Stopwatch _stopwatch = clock.stopwatch();
   Duration _lastFrame = Duration.zero;
   double _clock = 0;
   double _lastSquashAt = -100;
