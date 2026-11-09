@@ -42,6 +42,18 @@ class _FloatingText {
   bool get expired => age >= lifetime;
 }
 
+class _TapRipple {
+  _TapRipple({required this.position, required this.hit});
+
+  final Offset position;
+  final bool hit;
+  double age = 0;
+
+  static const double lifetime = 0.35;
+  double get progress => (age / lifetime).clamp(0.0, 1.0);
+  bool get expired => age >= lifetime;
+}
+
 class _GameControllerState extends State<GameController>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   static const int _maxHealth = 5;
@@ -49,6 +61,7 @@ class _GameControllerState extends State<GameController>
   static const int _squashesPerLevel = 3;
   static const int _maxMultiplier = 5;
   final List<_FloatingText> _floaters = <_FloatingText>[];
+  final List<_TapRipple> _ripples = <_TapRipple>[];
   final Stopwatch _stopwatch = Stopwatch();
   Duration _lastFrame = Duration.zero;
   double _clock = 0;
@@ -187,6 +200,10 @@ class _GameControllerState extends State<GameController>
       f.age += dt;
     }
     _floaters.removeWhere((f) => f.expired);
+    for (final r in _ripples) {
+      r.age += dt;
+    }
+    _ripples.removeWhere((r) => r.expired);
 
     final hits = <EnemyAnt>[];
     for (final ant in _ants) {
@@ -228,6 +245,7 @@ class _GameControllerState extends State<GameController>
     if (hits.isNotEmpty ||
         _ants.isNotEmpty ||
         _floaters.isNotEmpty ||
+        _ripples.isNotEmpty ||
         _gameOver) {
       setState(() {});
     }
@@ -381,6 +399,38 @@ class _GameControllerState extends State<GameController>
     }
   }
 
+  /// Extra touch radius around every ant so near-misses still count.
+  static const double _tapSlop = 22;
+  static const double _minHitRadius = 38;
+
+  /// Taps are handled on the whole arena (on touch-down, multi-touch safe)
+  /// and snapped to the closest ant within a forgiving radius.
+  void _onArenaPointerDown(PointerDownEvent event) {
+    if (_gameOver || _paused || !_loopStarted) {
+      return;
+    }
+    final point = event.localPosition;
+    EnemyAnt? best;
+    var bestRatio = double.infinity;
+    for (final ant in _ants) {
+      if (ant.squashed) continue;
+      // Aim slightly ahead of the ant, since it keeps moving while you tap.
+      final aim = ant.center + ant.velocity * 0.06;
+      final radius = max(ant.size * 0.5, _minHitRadius) + _tapSlop;
+      final ratio = (point - aim).distance / radius;
+      if (ratio <= 1 && ratio < bestRatio) {
+        best = ant;
+        bestRatio = ratio;
+      }
+    }
+    setState(
+      () => _ripples.add(_TapRipple(position: point, hit: best != null)),
+    );
+    if (best != null) {
+      _squashAnt(best);
+    }
+  }
+
   void _togglePause() {
     if (_paused) {
       _resume();
@@ -399,6 +449,7 @@ class _GameControllerState extends State<GameController>
     setState(() {
       _ants.clear();
       _floaters.clear();
+      _ripples.clear();
       _score = 0;
       _health = _maxHealth;
       _combo = 0;
@@ -492,139 +543,178 @@ class _GameControllerState extends State<GameController>
                                 color: Colors.white.withOpacity(0.08),
                               ),
                             ),
-                            child: Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                if (_loopStarted)
-                                  Positioned(
-                                    left: 0,
-                                    top: 0,
-                                    right: 0,
-                                    bottom: 0,
-                                    child: _buildArenaGlow(),
-                                  ),
-                                if (_loopStarted)
-                                  Positioned(
-                                    left: _cake.topLeft.dx,
-                                    top: _cake.topLeft.dy,
-                                    child: _buildCake(),
-                                  ),
-                                for (final ant in _ants)
-                                  Positioned(
-                                    left: ant.position.dx,
-                                    top: ant.position.dy,
-                                    child: GestureDetector(
-                                      onTap: () => _squashAnt(ant),
-                                      behavior: HitTestBehavior.opaque,
-                                      child: _buildAnt(ant),
+                            child: Listener(
+                              behavior: HitTestBehavior.opaque,
+                              onPointerDown: _onArenaPointerDown,
+                              child: Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  if (_loopStarted)
+                                    Positioned(
+                                      left: 0,
+                                      top: 0,
+                                      right: 0,
+                                      bottom: 0,
+                                      child: _buildArenaGlow(),
                                     ),
-                                  ),
-                                for (final f in _floaters)
-                                  Positioned(
-                                    left: f.position.dx - 60,
-                                    top:
-                                        f.position.dy -
-                                        20 -
-                                        (f.age / _FloatingText.lifetime) * 40,
-                                    width: 120,
-                                    child: IgnorePointer(
-                                      child: Opacity(
-                                        opacity:
-                                            (1 - f.age / _FloatingText.lifetime)
-                                                .clamp(0.0, 1.0),
-                                        child: Text(
-                                          f.text,
-                                          textAlign: TextAlign.center,
-                                          style: TextStyle(
-                                            color: f.color ?? Colors.white,
-                                            fontWeight: FontWeight.w900,
-                                            fontSize: 16,
-                                            shadows: const [
-                                              Shadow(
-                                                color: Colors.black87,
-                                                blurRadius: 4,
+                                  if (_loopStarted)
+                                    Positioned(
+                                      left: _cake.topLeft.dx,
+                                      top: _cake.topLeft.dy,
+                                      child: _buildCake(),
+                                    ),
+                                  for (final ant in _ants)
+                                    Positioned(
+                                      left: ant.position.dx,
+                                      top: ant.position.dy,
+                                      child: IgnorePointer(
+                                        child: _buildAnt(ant),
+                                      ),
+                                    ),
+                                  for (final r in _ripples)
+                                    Positioned(
+                                      left: r.position.dx - 40,
+                                      top: r.position.dy - 40,
+                                      width: 80,
+                                      height: 80,
+                                      child: IgnorePointer(
+                                        child: Center(
+                                          child: Container(
+                                            width: 16 + 56 * r.progress,
+                                            height: 16 + 56 * r.progress,
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                color:
+                                                    (r.hit
+                                                            ? AppColors.gold
+                                                            : Colors.white)
+                                                        .withValues(
+                                                          alpha:
+                                                              0.6 *
+                                                              (1 - r.progress),
+                                                        ),
+                                                width: 3,
                                               ),
-                                            ],
+                                            ),
                                           ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                Positioned(
-                                  top: 64,
-                                  left: 16,
-                                  right: 16,
-                                  child: IgnorePointer(
-                                    child: AnimatedSwitcher(
-                                      duration: const Duration(
-                                        milliseconds: 300,
-                                      ),
-                                      transitionBuilder: (child, anim) =>
-                                          FadeTransition(
-                                            opacity: anim,
-                                            child: SlideTransition(
-                                              position: Tween<Offset>(
-                                                begin: const Offset(0, -0.4),
-                                                end: Offset.zero,
-                                              ).animate(anim),
-                                              child: child,
+                                  for (final f in _floaters)
+                                    Positioned(
+                                      left: f.position.dx - 60,
+                                      top:
+                                          f.position.dy -
+                                          20 -
+                                          (f.age / _FloatingText.lifetime) * 40,
+                                      width: 120,
+                                      child: IgnorePointer(
+                                        child: Opacity(
+                                          opacity:
+                                              (1 -
+                                                      f.age /
+                                                          _FloatingText
+                                                              .lifetime)
+                                                  .clamp(0.0, 1.0),
+                                          child: Text(
+                                            f.text,
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                              color: f.color ?? Colors.white,
+                                              fontWeight: FontWeight.w900,
+                                              fontSize: 16,
+                                              shadows: const [
+                                                Shadow(
+                                                  color: Colors.black87,
+                                                  blurRadius: 4,
+                                                ),
+                                              ],
                                             ),
                                           ),
-                                      child: _activeToast == null
-                                          ? const SizedBox.shrink(
-                                              key: ValueKey('none'),
-                                            )
-                                          : _buildAchievementToast(
-                                              _activeToast!,
-                                            ),
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                ),
-                                if (_combo >= 2 && !_gameOver)
                                   Positioned(
-                                    top: 12,
-                                    left: 0,
-                                    right: 0,
+                                    top: 64,
+                                    left: 16,
+                                    right: 16,
                                     child: IgnorePointer(
-                                      child: Center(child: _buildComboChip()),
+                                      child: AnimatedSwitcher(
+                                        duration: const Duration(
+                                          milliseconds: 300,
+                                        ),
+                                        transitionBuilder: (child, anim) =>
+                                            FadeTransition(
+                                              opacity: anim,
+                                              child: SlideTransition(
+                                                position: Tween<Offset>(
+                                                  begin: const Offset(0, -0.4),
+                                                  end: Offset.zero,
+                                                ).animate(anim),
+                                                child: child,
+                                              ),
+                                            ),
+                                        child: _activeToast == null
+                                            ? const SizedBox.shrink(
+                                                key: ValueKey('none'),
+                                              )
+                                            : _buildAchievementToast(
+                                                _activeToast!,
+                                              ),
+                                      ),
                                     ),
                                   ),
-                                Positioned(
-                                  left: 18,
-                                  right: 18,
-                                  bottom: 18,
-                                  child: AnimatedOpacity(
-                                    opacity: _damageFlash ? 1 : 0.0,
-                                    duration: const Duration(milliseconds: 120),
-                                    child: const _DamageBanner(),
-                                  ),
-                                ),
-                                if (_clock < 7 || _gameOver)
+                                  if (_combo >= 2 && !_gameOver)
+                                    Positioned(
+                                      top: 12,
+                                      left: 0,
+                                      right: 0,
+                                      child: IgnorePointer(
+                                        child: Center(child: _buildComboChip()),
+                                      ),
+                                    ),
                                   Positioned(
                                     left: 18,
                                     right: 18,
                                     bottom: 18,
-                                    child: IgnorePointer(
-                                      child: _buildTipCard(),
+                                    child: AnimatedOpacity(
+                                      opacity: _damageFlash ? 1 : 0.0,
+                                      duration: const Duration(
+                                        milliseconds: 120,
+                                      ),
+                                      child: const _DamageBanner(),
                                     ),
                                   ),
-                                if (_paused && !_gameOver)
-                                  Positioned.fill(child: _buildPauseOverlay()),
-                                if (_gameOver)
-                                  Positioned.fill(
-                                    child: _buildGameOverOverlay(),
-                                  ),
-                                if (!_loopStarted)
-                                  const Positioned.fill(
-                                    child: Center(
-                                      child: SizedBox(
-                                        width: 42,
-                                        height: 42,
-                                        child: CircularProgressIndicator(),
+                                  if (_clock < 7 || _gameOver)
+                                    Positioned(
+                                      left: 18,
+                                      right: 18,
+                                      bottom: 18,
+                                      child: IgnorePointer(
+                                        child: _buildTipCard(),
                                       ),
                                     ),
-                                  ),
-                              ],
+                                  if (_paused && !_gameOver)
+                                    Positioned.fill(
+                                      child: _buildPauseOverlay(),
+                                    ),
+                                  if (_gameOver)
+                                    Positioned.fill(
+                                      child: _buildGameOverOverlay(),
+                                    ),
+                                  if (!_loopStarted)
+                                    const Positioned.fill(
+                                      child: Center(
+                                        child: SizedBox(
+                                          width: 42,
+                                          height: 42,
+                                          child: CircularProgressIndicator(),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
@@ -941,7 +1031,7 @@ class _GameControllerState extends State<GameController>
       child: Text(
         _gameOver
             ? 'The ants broke through. Return to the start screen to try again.'
-            : 'Tap the ants. Chain squashes for combo points!',
+            : 'Tap near an ant to squash it. Chain squashes for combos!',
         textAlign: TextAlign.center,
         style: Theme.of(
           context,
