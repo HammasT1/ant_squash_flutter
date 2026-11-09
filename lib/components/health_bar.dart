@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'ui_kit.dart';
+
 class HealthBar extends StatelessWidget {
   const HealthBar({
     super.key,
@@ -12,44 +14,47 @@ class HealthBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final progress = maxHealth == 0 ? 0.0 : currentHealth / maxHealth;
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        color: Colors.white.withOpacity(0.08),
-        border: Border.all(color: Colors.white.withOpacity(0.12)),
-      ),
+    return GlassCard(
+      radius: 20,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            'Sweet Shield',
-            style: Theme.of(context).textTheme.labelLarge?.copyWith(
-              color: Colors.white70,
-              letterSpacing: 0.4,
+          const Text(
+            'SWEET SHIELD',
+            style: TextStyle(
+              color: AppColors.textDim,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.4,
             ),
           ),
-          const SizedBox(height: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: LinearProgressIndicator(
-              minHeight: 14,
-              value: progress.clamp(0.0, 1.0),
-              backgroundColor: const Color(0xFF2A3444),
-              valueColor: const AlwaysStoppedAnimation<Color>(
-                Color(0xFFFFB347),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '$currentHealth / $maxHealth sweets left',
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < maxHealth; i++)
+                AnimatedScale(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeOutBack,
+                  scale: i < currentHealth ? 1.0 : 0.7,
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 2),
+                    child: Icon(
+                      i < currentHealth
+                          ? Icons.favorite_rounded
+                          : Icons.favorite_border_rounded,
+                      size: 20,
+                      color: i < currentHealth
+                          ? (currentHealth <= 1
+                                ? AppColors.danger
+                                : const Color(0xFFFF7A7A))
+                          : Colors.white30,
+                    ),
+                  ),
+                ),
+            ],
           ),
         ],
       ),

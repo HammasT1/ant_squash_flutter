@@ -8,8 +8,12 @@ import 'EnemySpawner.dart';
 import 'Player.dart';
 import 'ScoreText.dart';
 import 'Storage.dart';
+import 'achievements.dart';
 import 'audio_service.dart';
+import 'stats.dart';
+import 'ui_kit.dart';
 import 'health_bar.dart';
+import 'profile_screen.dart';
 import 'image_provider.dart';
 
 class GameController extends StatefulWidget {
@@ -53,6 +57,11 @@ class _GameControllerState extends State<GameController>
   int _bestCombo = 0;
   bool _paused = false;
   bool _newHighScore = false;
+  RunStats _run = RunStats();
+  bool _committed = false;
+  final List<Achievement> _newlyUnlocked = <Achievement>[];
+  final List<Achievement> _toastQueue = <Achievement>[];
+  Achievement? _activeToast;
   final Random _random = Random();
   late final EnemySpawner _spawner;
   late final AnimationController _ambientController;
@@ -111,6 +120,7 @@ class _GameControllerState extends State<GameController>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _finishRun();
     _spawnTimer?.cancel();
     _frameTimer?.cancel();
     _ambientController.dispose();
@@ -169,6 +179,7 @@ class _GameControllerState extends State<GameController>
     }
 
     _clock += dt;
+    _run.seconds += dt;
     if (_combo > 0 && _clock - _lastSquashAt > _comboWindow) {
       _combo = 0;
     }
@@ -227,11 +238,13 @@ class _GameControllerState extends State<GameController>
       return;
     }
     _health -= 1;
+    _run.damageTaken += 1;
     _damageFlash = true;
     _combo = 0;
     if (_health <= 0) {
       _gameOver = true;
       _newHighScore = GameStorage.saveScore(widget.playerName, _score);
+      _finishRun();
       _spawnTimer?.cancel();
       _frameTimer?.cancel();
       GameAudio.play(GameSound.gameOver);
@@ -276,6 +289,11 @@ class _GameControllerState extends State<GameController>
 
       final points = ant.type.basePoints * _multiplier;
       _score += points;
+      _run
+        ..score = _score
+        ..squashed += 1
+        ..bestCombo = _bestCombo
+        ..byType[ant.type] = _run.count(ant.type) + 1;
 
       final label = _multiplier > 1
           ? '+$points  x$_multiplier COMBO!'
@@ -318,6 +336,49 @@ class _GameControllerState extends State<GameController>
       _multiplier > multiplierBefore ? GameSound.combo : GameSound.squash,
     );
     GameAudio.haptic();
+    _checkAchievements();
+  }
+
+  /// Unlocks any achievement the current run has just satisfied.
+  void _checkAchievements() {
+    for (final a in Achievements.all) {
+      if (GameStorage.unlocked.contains(a.id)) continue;
+      if (a.isSatisfied(GameStorage.stats, _run)) {
+        GameStorage.unlock(a.id);
+        _newlyUnlocked.add(a);
+        _toastQueue.add(a);
+      }
+    }
+    _showNextToast();
+  }
+
+  void _showNextToast() {
+    if (_activeToast != null || _toastQueue.isEmpty || !mounted) return;
+    setState(() => _activeToast = _toastQueue.removeAt(0));
+    GameAudio.play(GameSound.combo);
+    Future.delayed(const Duration(milliseconds: 2600), () {
+      if (!mounted) return;
+      setState(() => _activeToast = null);
+      Future.delayed(const Duration(milliseconds: 250), _showNextToast);
+    });
+  }
+
+  /// Banks the run into lifetime stats exactly once.
+  void _finishRun() {
+    if (_committed || _run.seconds <= 0) return;
+    _committed = true;
+    _checkAchievementsSilently();
+    GameStorage.commitRun(_run);
+  }
+
+  void _checkAchievementsSilently() {
+    for (final a in Achievements.all) {
+      if (GameStorage.unlocked.contains(a.id)) continue;
+      if (a.isSatisfied(GameStorage.stats, _run)) {
+        GameStorage.unlock(a.id);
+        _newlyUnlocked.add(a);
+      }
+    }
   }
 
   void _togglePause() {
@@ -329,6 +390,7 @@ class _GameControllerState extends State<GameController>
   }
 
   void _restartRun() {
+    _finishRun();
     _spawnTimer?.cancel();
     _frameTimer?.cancel();
     _stopwatch
@@ -349,6 +411,11 @@ class _GameControllerState extends State<GameController>
       _gameOver = false;
       _damageFlash = false;
       _newHighScore = false;
+      _run = RunStats();
+      _committed = false;
+      _newlyUnlocked.clear();
+      _toastQueue.clear();
+      _activeToast = null;
       _loopStarted = false;
       _queuedArenaStart = false;
     });
@@ -379,68 +446,7 @@ class _GameControllerState extends State<GameController>
 
           return Stack(
             children: [
-              Positioned.fill(
-                child: AnimatedBuilder(
-                  animation: _ambientController,
-                  builder: (context, child) {
-                    final t = _ambientController.value;
-                    return Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            Color.lerp(
-                              const Color(0xFF09101D),
-                              const Color(0xFF1C2D4D),
-                              t,
-                            )!,
-                            Color.lerp(
-                              const Color(0xFF10263C),
-                              const Color(0xFF291633),
-                              t,
-                            )!,
-                            const Color(0xFF08111F),
-                          ],
-                        ),
-                      ),
-                      child: child,
-                    );
-                  },
-                ),
-              ),
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: AnimatedBuilder(
-                    animation: _ambientController,
-                    builder: (context, child) {
-                      final t = _ambientController.value;
-                      return Stack(
-                        children: [
-                          _ambientBlob(
-                            left: -70,
-                            top: 80 + sin(t * pi * 2) * 20,
-                            size: 220,
-                            color: const Color(0xFFFF7E33).withOpacity(0.13),
-                          ),
-                          _ambientBlob(
-                            right: -50,
-                            top: 160 + cos(t * pi * 2) * 24,
-                            size: 180,
-                            color: const Color(0xFFFFD36A).withOpacity(0.1),
-                          ),
-                          _ambientBlob(
-                            left: 70,
-                            bottom: 100 + sin(t * pi * 2 * 1.2) * 18,
-                            size: 150,
-                            color: const Color(0xFF59D8FF).withOpacity(0.08),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
-              ),
+              const Positioned.fill(child: AnimatedBackdrop()),
               SafeArea(
                 child: Column(
                   children: [
@@ -454,13 +460,10 @@ class _GameControllerState extends State<GameController>
                               score: _score,
                             ),
                           ),
-                          const SizedBox(width: 12),
-                          SizedBox(
-                            width: 170,
-                            child: HealthBar(
-                              currentHealth: _health,
-                              maxHealth: _maxHealth,
-                            ),
+                          const SizedBox(width: 10),
+                          HealthBar(
+                            currentHealth: _health,
+                            maxHealth: _maxHealth,
                           ),
                           const SizedBox(width: 8),
                           IconButton.filledTonal(
@@ -547,6 +550,36 @@ class _GameControllerState extends State<GameController>
                                       ),
                                     ),
                                   ),
+                                Positioned(
+                                  top: 64,
+                                  left: 16,
+                                  right: 16,
+                                  child: IgnorePointer(
+                                    child: AnimatedSwitcher(
+                                      duration: const Duration(
+                                        milliseconds: 300,
+                                      ),
+                                      transitionBuilder: (child, anim) =>
+                                          FadeTransition(
+                                            opacity: anim,
+                                            child: SlideTransition(
+                                              position: Tween<Offset>(
+                                                begin: const Offset(0, -0.4),
+                                                end: Offset.zero,
+                                              ).animate(anim),
+                                              child: child,
+                                            ),
+                                          ),
+                                      child: _activeToast == null
+                                          ? const SizedBox.shrink(
+                                              key: ValueKey('none'),
+                                            )
+                                          : _buildAchievementToast(
+                                              _activeToast!,
+                                            ),
+                                    ),
+                                  ),
+                                ),
                                 if (_combo >= 2 && !_gameOver)
                                   Positioned(
                                     top: 12,
@@ -566,12 +599,15 @@ class _GameControllerState extends State<GameController>
                                     child: const _DamageBanner(),
                                   ),
                                 ),
-                                Positioned(
-                                  left: 18,
-                                  right: 18,
-                                  bottom: 18,
-                                  child: _buildTipCard(),
-                                ),
+                                if (_clock < 7 || _gameOver)
+                                  Positioned(
+                                    left: 18,
+                                    right: 18,
+                                    bottom: 18,
+                                    child: IgnorePointer(
+                                      child: _buildTipCard(),
+                                    ),
+                                  ),
                                 if (_paused && !_gameOver)
                                   Positioned.fill(child: _buildPauseOverlay()),
                                 if (_gameOver)
@@ -777,66 +813,118 @@ class _GameControllerState extends State<GameController>
 
   Widget _buildPauseOverlay() {
     return Container(
-      color: Colors.black.withOpacity(0.65),
+      color: Colors.black.withValues(alpha: 0.65),
       child: Center(
-        child: Container(
-          width: min(360, _arenaSize.width - 40),
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(28),
-            color: const Color(0xFF101A2A).withOpacity(0.96),
-            border: Border.all(color: Colors.white.withOpacity(0.12)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.pause_circle_rounded,
-                size: 52,
-                color: Color(0xFFFFA63D),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                'Paused',
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w900,
-                  color: Colors.white,
-                ),
-              ),
-              const SizedBox(height: 18),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: _resume,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFFFF8A2A),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: GlassCard(
+              radius: 28,
+              padding: const EdgeInsets.all(24),
+              highlight: true,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.pause_circle_rounded,
+                    size: 56,
+                    color: AppColors.gold,
                   ),
-                  child: const Text('Resume'),
-                ),
-              ),
-              const SizedBox(height: 10),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton(
-                  onPressed: _restartRun,
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'PAUSED',
+                    style: TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 3,
+                    ),
                   ),
-                  child: const Text('Restart'),
-                ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: PrimaryButton(
+                      label: 'RESUME',
+                      icon: Icons.play_arrow_rounded,
+                      onPressed: _resume,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: SecondaryButton(
+                      label: 'Restart',
+                      icon: Icons.replay_rounded,
+                      onPressed: _restartRun,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: SecondaryButton(
+                      label: 'Quit to Menu',
+                      icon: Icons.home_rounded,
+                      onPressed: widget.onExitToStart,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 10),
-              SizedBox(
-                width: double.infinity,
-                child: TextButton(
-                  onPressed: widget.onExitToStart,
-                  child: const Text('Quit to Menu'),
-                ),
-              ),
-            ],
+            ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAchievementToast(Achievement a) {
+    return Center(
+      key: ValueKey(a.id),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          color: AppColors.surface.withValues(alpha: 0.95),
+          border: Border.all(color: AppColors.gold.withValues(alpha: 0.6)),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.gold.withValues(alpha: 0.25),
+              blurRadius: 18,
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: AppColors.accentGradient,
+              ),
+              child: Icon(a.icon, color: Colors.white, size: 20),
+            ),
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'ACHIEVEMENT UNLOCKED',
+                  style: TextStyle(
+                    color: AppColors.gold,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                Text(
+                  a.title,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
@@ -863,144 +951,141 @@ class _GameControllerState extends State<GameController>
   }
 
   Widget _buildGameOverOverlay() {
-    return Container(
-      color: Colors.black.withOpacity(0.6),
-      child: Center(
-        child: TweenAnimationBuilder<double>(
-          tween: Tween(begin: 0.9, end: 1.0),
-          duration: const Duration(milliseconds: 500),
-          curve: Curves.easeOutBack,
-          builder: (context, scale, child) {
-            return Transform.scale(scale: scale, child: child);
-          },
-          child: Container(
-            width: min(430, _arenaSize.width - 40),
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(28),
-              color: const Color(0xFF101A2A).withOpacity(0.96),
-              border: Border.all(color: Colors.white.withOpacity(0.12)),
-              boxShadow: const [
-                BoxShadow(
-                  color: Colors.black87,
-                  blurRadius: 30,
-                  offset: Offset(0, 18),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.local_fire_department_rounded,
-                  size: 52,
-                  color: Color(0xFFFFA63D),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Game Over',
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.w900,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Final score: $_score',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleMedium?.copyWith(color: Colors.white70),
-                ),
-                if (_newHighScore) ...[
-                  const SizedBox(height: 6),
-                  const Text(
-                    'New high score!',
-                    style: TextStyle(
-                      color: Color(0xFFFFD36A),
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 6),
-                Text(
-                  'Best combo: $_bestCombo',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(color: Colors.white54),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Best score: ${GameStorage.highScore}',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(color: Colors.white54),
-                ),
-                const SizedBox(height: 18),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: _restartRun,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFFFF8A2A),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                    child: const Text(
-                      'Play Again',
-                      style: TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: _restart,
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                    child: const Text(
-                      'Back to Start Screen',
-                      style: TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+    Widget stat(IconData icon, String value, String label) => Expanded(
+      child: Column(
+        children: [
+          Icon(icon, color: AppColors.gold, size: 20),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
           ),
-        ),
+          Text(
+            label,
+            style: const TextStyle(color: AppColors.textDim, fontSize: 11),
+          ),
+        ],
       ),
     );
-  }
-
-  Widget _ambientBlob({
-    double? left,
-    double? right,
-    double? top,
-    double? bottom,
-    required double size,
-    required Color color,
-  }) {
-    return Positioned(
-      left: left,
-      right: right,
-      top: top,
-      bottom: bottom,
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: color,
-          boxShadow: [
-            BoxShadow(color: color, blurRadius: 85, spreadRadius: 10),
-          ],
+    final seconds = _run.seconds.round();
+    return Container(
+      color: Colors.black.withValues(alpha: 0.65),
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0.9, end: 1.0),
+            duration: const Duration(milliseconds: 500),
+            curve: Curves.easeOutBack,
+            builder: (context, scale, child) =>
+                Transform.scale(scale: scale, child: child),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 400),
+              child: GlassCard(
+                radius: 28,
+                padding: const EdgeInsets.all(22),
+                highlight: _newHighScore,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'GAME OVER',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 4,
+                        color: AppColors.textDim,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    ShaderMask(
+                      shaderCallback: (r) =>
+                          AppColors.accentGradient.createShader(r),
+                      child: Text(
+                        '$_score',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 64,
+                          height: 1,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    if (_newHighScore)
+                      const Text(
+                        'NEW HIGH SCORE!',
+                        style: TextStyle(
+                          color: AppColors.gold,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1.5,
+                        ),
+                      )
+                    else
+                      Text(
+                        'Best: ${GameStorage.highScore}',
+                        style: const TextStyle(color: AppColors.textDim),
+                      ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        stat(
+                          Icons.bug_report_rounded,
+                          '${_run.squashed}',
+                          'Squashed',
+                        ),
+                        stat(Icons.bolt_rounded, '$_bestCombo', 'Best combo'),
+                        stat(Icons.timer_rounded, '${seconds}s', 'Survived'),
+                      ],
+                    ),
+                    if (_newlyUnlocked.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'UNLOCKED THIS RUN',
+                          style: TextStyle(
+                            color: AppColors.gold,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.4,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      for (final a in _newlyUnlocked)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: AchievementTile(
+                            achievement: a,
+                            unlocked: true,
+                            progress: a.target,
+                          ),
+                        ),
+                    ],
+                    const SizedBox(height: 18),
+                    SizedBox(
+                      width: double.infinity,
+                      child: PrimaryButton(
+                        label: 'PLAY AGAIN',
+                        icon: Icons.replay_rounded,
+                        onPressed: _restartRun,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: SecondaryButton(
+                        label: 'Main Menu',
+                        icon: Icons.home_rounded,
+                        onPressed: _restart,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );

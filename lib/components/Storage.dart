@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'stats.dart';
+
 class LeaderboardEntry {
   const LeaderboardEntry({
     required this.name,
@@ -40,12 +42,16 @@ class GameStorage {
   static const String _kLastName = 'last_player_name';
   static const String _kLeaderboard = 'leaderboard';
   static const String _kSound = 'sound_enabled';
+  static const String _kStats = 'lifetime_stats';
+  static const String _kUnlocked = 'unlocked_achievements';
 
   static SharedPreferences? _prefs;
 
   static String? lastPlayerName;
   static bool soundEnabled = true;
   static List<LeaderboardEntry> leaderboard = <LeaderboardEntry>[];
+  static LifetimeStats stats = LifetimeStats();
+  static Set<String> unlocked = <String>{};
 
   static int get highScore => leaderboard.isEmpty ? 0 : leaderboard.first.score;
 
@@ -56,6 +62,14 @@ class GameStorage {
       _prefs = prefs;
       lastPlayerName = prefs.getString(_kLastName);
       soundEnabled = prefs.getBool(_kSound) ?? true;
+      unlocked = (prefs.getStringList(_kUnlocked) ?? const <String>[]).toSet();
+      final rawStats = prefs.getString(_kStats);
+      if (rawStats != null) {
+        final decoded = jsonDecode(rawStats);
+        if (decoded is Map) {
+          stats = LifetimeStats.fromJson(decoded);
+        }
+      }
       final raw = prefs.getString(_kLeaderboard);
       if (raw != null) {
         final decoded = jsonDecode(raw);
@@ -106,5 +120,17 @@ class GameStorage {
       jsonEncode(leaderboard.map((e) => e.toJson()).toList()),
     );
     return isNewBest;
+  }
+
+  static void unlock(String id) {
+    if (unlocked.add(id)) {
+      _prefs?.setStringList(_kUnlocked, unlocked.toList());
+    }
+  }
+
+  /// Adds a finished (or abandoned) run to the lifetime totals.
+  static void commitRun(RunStats run) {
+    stats.absorb(run);
+    _prefs?.setString(_kStats, jsonEncode(stats.toJson()));
   }
 }
