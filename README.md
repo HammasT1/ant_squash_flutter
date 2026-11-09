@@ -62,6 +62,21 @@ flutter run
 
 Pick a target with `flutter run -d chrome`, `-d linux`, `-d windows`, `-d macos`, or a connected Android/iOS device.
 
+### 📦 Download the APK
+
+[![Build APK](https://github.com/<your-username>/ant_squash_flutter/actions/workflows/build-apk.yml/badge.svg)](../../actions/workflows/build-apk.yml)
+
+APKs are built automatically by GitHub Actions on every push to `main`, on pull requests, and on manual runs (**Actions → Build APK → Run workflow**). Download them from the run's **Artifacts** section.
+
+To publish a release with the APKs attached, push a version tag:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+> Release builds are currently signed with the debug key. Configure a proper keystore before publishing to the Play Store.
+
 ## 🗂️ Project Structure
 
 ```
@@ -78,6 +93,7 @@ lib/
     ├── Storage.dart           # In-memory high score
     └── image_provider.dart    # Asset paths
 assets/images/                 # Ant, cake and explosion sprites
+.github/workflows/             # CI: APK build and release
 ```
 
 ## 🛠️ Built With
