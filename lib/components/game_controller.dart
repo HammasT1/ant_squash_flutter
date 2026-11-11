@@ -14,7 +14,6 @@ import 'audio_service.dart';
 import 'stats.dart';
 import 'ui_kit.dart';
 import 'health_bar.dart';
-import 'profile_screen.dart';
 import 'image_provider.dart';
 
 class GameController extends StatefulWidget {
@@ -262,6 +261,7 @@ class _GameControllerState extends State<GameController>
     _combo = 0;
     if (_health <= 0) {
       _gameOver = true;
+      _damageFlash = false;
       _newHighScore = GameStorage.saveScore(widget.playerName, _score);
       _finishRun();
       _spawnTimer?.cancel();
@@ -687,7 +687,7 @@ class _GameControllerState extends State<GameController>
                                       child: const _DamageBanner(),
                                     ),
                                   ),
-                                  if (_clock < 7 || _gameOver)
+                                  if (_clock < 7 && !_gameOver)
                                     Positioned(
                                       left: 18,
                                       right: 18,
@@ -829,6 +829,21 @@ class _GameControllerState extends State<GameController>
                   clipBehavior: Clip.none,
                   alignment: Alignment.center,
                   children: [
+                    // Soft halo so the dark sprite stands out on the arena.
+                    Container(
+                      width: ant.size * 1.35,
+                      height: ant.size * 1.35,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: RadialGradient(
+                          colors: [
+                            (ant.type.tint ?? const Color(0xFFFFE2B0))
+                                .withValues(alpha: 0.38),
+                            Colors.transparent,
+                          ],
+                        ),
+                      ),
+                    ),
                     _antSprite(ant),
                     if (ant.type.hp > 1)
                       Positioned(
@@ -912,6 +927,7 @@ class _GameControllerState extends State<GameController>
             constraints: const BoxConstraints(maxWidth: 360),
             child: GlassCard(
               radius: 28,
+              solid: true,
               padding: const EdgeInsets.all(24),
               highlight: true,
               child: Column(
@@ -1074,6 +1090,7 @@ class _GameControllerState extends State<GameController>
               constraints: const BoxConstraints(maxWidth: 400),
               child: GlassCard(
                 radius: 28,
+                solid: true,
                 padding: const EdgeInsets.all(22),
                 highlight: _newHighScore,
                 child: Column(
@@ -1144,15 +1161,41 @@ class _GameControllerState extends State<GameController>
                         ),
                       ),
                       const SizedBox(height: 8),
-                      for (final a in _newlyUnlocked)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: AchievementTile(
-                            achievement: a,
-                            unlocked: true,
-                            progress: a.target,
-                          ),
-                        ),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final a in _newlyUnlocked)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(99),
+                                color: AppColors.gold.withValues(alpha: 0.12),
+                                border: Border.all(
+                                  color: AppColors.gold.withValues(alpha: 0.5),
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(a.icon, size: 16, color: AppColors.gold),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    a.title,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
                     ],
                     const SizedBox(height: 18),
                     SizedBox(

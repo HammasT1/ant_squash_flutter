@@ -132,6 +132,7 @@ class GlassCard extends StatelessWidget {
     this.padding = const EdgeInsets.all(16),
     this.radius = 24,
     this.highlight = false,
+    this.solid = false,
   });
 
   final Widget child;
@@ -139,13 +140,18 @@ class GlassCard extends StatelessWidget {
   final double radius;
   final bool highlight;
 
+  /// Opaque surface for dialogs that sit on top of the game.
+  final bool solid;
+
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: padding,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(radius),
-        color: Colors.white.withValues(alpha: highlight ? 0.12 : 0.07),
+        color: solid
+            ? AppColors.surface
+            : Colors.white.withValues(alpha: highlight ? 0.12 : 0.07),
         border: Border.all(
           color: highlight
               ? AppColors.gold.withValues(alpha: 0.5)
